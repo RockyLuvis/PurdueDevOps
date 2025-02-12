@@ -1,0 +1,36 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['Dev', 'Staging', 'Production'], description: 'Select the environment')
+    }
+
+    stages {
+        stage('Deploy Common Parameters') {
+            steps {
+                sh 'aws cloudformation deploy --template-file common-parameters.yaml --stack-name common-parameters-stack --capabilities CAPABILITY_NAMED_IAM'
+            }
+        }
+
+        stage('Replicate Common Parameters') {
+            steps {
+                script {
+                    // Assume role and replicate parameters
+                    sh '''
+                    CREDENTIALS=$(aws sts assume-role --role-arn arn:aws:iam::CENTRAL_ACCOUNT_ID:role/CommonParametersAccessRole --role-session-name ReplicateCommonParameters)
+                    export AWS_ACCESS_KEY_ID=$(echo $CREDENTIALS | jq -r .Credentials.AccessKeyId)
+                    export AWS_SECRET_ACCESS_KEY=$(echo $CREDENTIALS | jq -r .Credentials.SecretAccessKey)
+                    export AWS_SESSION_TOKEN=$(echo $CREDENTIALS | jq -r .Credentials.SessionToken)
+                    aws ssm put-parameter --name /common/api_key --type SecureString --value "$(aws ssm get-parameter --name /common/api_key --with-decryption --query Parameter.Value --output text)" --overwrite
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Environment-Specific Parameters') {
+            steps {
+                sh 'aws cloudformation deploy --template-file ${params.ENVIRONMENT.toLowerCase()}-parameters.yaml --stack-name env-parameters-stack-${params.ENVIRONMENT} --capabilities CAPABILITY_NAMED_IAM'
+            }
+        }
+    }
+}
